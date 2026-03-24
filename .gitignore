@@ -1,0 +1,25 @@
+# Secrets — NEVER commit these
+.env
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Local utilities
+deploy.sh
+
+# Website (not needed on VPS)
+web/
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log

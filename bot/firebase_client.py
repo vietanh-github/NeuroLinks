@@ -154,6 +154,18 @@ def add_link(url: str, category: str, user_id: int, username: str) -> str:
     _increment_stats(category, +1)
     return doc_ref.id
 
+def find_link_by_url(url: str) -> dict | None:
+    """Return existing link dict (with 'id') if URL already saved, else None."""
+    docs = list(
+        get_db().collection("links")
+        .where("url", "==", url)
+        .limit(1)
+        .stream()
+    )
+    if docs:
+        return {"id": docs[0].id, **docs[0].to_dict()}
+    return None
+
 def get_links(limit: int = 10, category_filter: str | None = None) -> list[dict]:
     q = (get_db().collection("links")
          .order_by("created_at", direction=firestore.Query.DESCENDING)

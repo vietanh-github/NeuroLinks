@@ -14,6 +14,7 @@ import bot.firebase_client as fb
 router = Router()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PER_PAGE = 5
+WEB_URL = "https://linva.net/NeuroLinks"
 
 
 # ── FSM ───────────────────────────────────────────────────────────────────────
@@ -128,30 +129,76 @@ def _main_text(is_super: bool) -> str:
 async def cmd_start(message: Message):
     uid  = message.from_user.id
     name = message.from_user.first_name or "bạn"
-    if _is_super(uid):             role = "👑 Super Admin"
-    elif _can_admin(uid):          role = "👮 Sub-Admin"
+    if _is_super(uid):                      role = "👑 Super Admin"
+    elif _can_admin(uid):                   role = "👮 Sub-Admin"
     elif fb.is_user_allowed(uid, ADMIN_ID): role = "✅ Thành viên"
-    else:                          role = "❌ Chưa được cấp quyền"
-    await message.answer(
+    else:                                   role = "❌ Chưa được cấp quyền"
+
+    stats = fb.get_stats()
+    can_use = fb.is_user_allowed(uid, ADMIN_ID)
+
+    text = (
         f"👋 Xin chào **{name}**!\n\n"
-        f"🔗 **NeuroLinks** — Thu thập & chia sẻ link.\n\n"
-        f"Vai trò: {role}\n\n/help để xem hướng dẫn.",
-        parse_mode="Markdown"
+        f"🔗 **NeuroLinks** thu thập link từ Telegram và hiển thị trên web theo thời gian thực.\n\n"
+        f"Vai trò của bạn: {role}\n"
+        f"📊 Tổng cộng: **{stats['total']}** links đã lưu"
     )
+    if not can_use:
+        text += "\n\n_Liên hệ admin để được cấp quyền gửi link._"
+
+    b = InlineKeyboardBuilder()
+    b.button(text="🌐 Xem NeuroLinks", url=WEB_URL)
+    if _can_admin(uid):
+        b.button(text="⚙️ Admin Panel", callback_data="AM_START")
+    b.button(text="📖 Hướng dẫn", callback_data="HELP")
+    b.adjust(1)
+
+    await message.answer(text, reply_markup=b.as_markup(), parse_mode="Markdown")
 
 
 # ── /help ─────────────────────────────────────────────────────────────────────
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    uid  = message.from_user.id
-    text = "🤖 **NeuroLinks — Hướng dẫn**\n\n• /start — Thông tin\n• /help — Hướng dẫn\n"
+    uid = message.from_user.id
+    await _send_help(message.answer, uid)
+
+async def _send_help(send_fn, uid: int):
+    text = "📖 **Hướng dẫn NeuroLinks**\n\n"
+    text += "• /start — Thông tin & menu chính\n"
+    text += "• /help — Hướng dẫn này\n"
     if fb.is_user_allowed(uid, ADMIN_ID):
-        text += "\n📎 **Gửi link:**\n• Paste URL bất kỳ\n• /add `<url> [category]`\n"
+        text += (
+            "\n📎 **Gửi link:**\n"
+            "• Paste URL bất kỳ → bot lưu ngay + hỏi category\n"
+            "• /add `<url> [category]` — thêm kèm category\n"
+            "\n_Link trùng? Bot sẽ hỏi bạn muốn làm gì._\n"
+        )
     if _can_admin(uid):
-        text += "\n⚙️ /admin — Bảng điều khiển\n"
+        text += "\n⚙️ /admin — Bảng điều khiển admin\n"
     if not fb.is_user_allowed(uid, ADMIN_ID):
         text += "\n_Liên hệ admin để được cấp quyền._"
-    await message.answer(text, parse_mode="Markdown")
+
+    b = InlineKeyboardBuilder()
+    b.button(text="🌐 Xem kết quả trên web", url=WEB_URL)
+    b.adjust(1)
+    await send_fn(text, reply_markup=b.as_markup(), parse_mode="Markdown")
+
+
+# ── Callback shortcuts from /start ───────────────────────────────────────────
+@router.callback_query(F.data == "AM_START")
+async def cb_am_start(cb: CallbackQuery, state: FSMContext):
+    if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
+    await state.clear()
+    uid = cb.from_user.id
+    await cb.message.answer(_main_text(_is_super(uid)),
+                            reply_markup=_kb_main(_is_super(uid)),
+                            parse_mode="Markdown")
+    await cb.answer()
+
+@router.callback_query(F.data == "HELP")
+async def cb_help(cb: CallbackQuery):
+    await _send_help(cb.message.answer, cb.from_user.id)
+    await cb.answer()
 
 
 # ── /admin ────────────────────────────────────────────────────────────────────

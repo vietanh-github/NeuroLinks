@@ -111,10 +111,10 @@ def _stats_ref():
 def _increment_stats(category: str, delta: int = 1):
     """Atomically increment total and per-category counter."""
     ref = _stats_ref()
-    ref.set({
-        "total": firestore.Increment(delta),
-        "by_category": {category: firestore.Increment(delta)},
-    }, merge=True)
+    update: dict = {"total": firestore.Increment(delta)}
+    if category:  # skip empty/missing category — AI tags replaced categories
+        update["by_category"] = {category: firestore.Increment(delta)}
+    ref.set(update, merge=True)
 
 def get_stats() -> dict:
     """O(1) read — stats maintained by add/delete operations."""

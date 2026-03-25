@@ -175,12 +175,18 @@ async def dup_save(cb: CallbackQuery):
         await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
 
     url      = state["url"]
+    existing = state["existing"]
     bot      = state.get("bot")
     uname    = _username(cb.from_user)
+
+    # Delete old entry, then save fresh (re-tag)
+    if existing.get("id"):
+        fb.delete_link(existing["id"])
     doc_id = fb.add_link(url=url, category="", user_id=state["uid"], username=uname)
+    asyncio.create_task(asyncio.to_thread(fb.track_user_activity, state["uid"], uname, 1))
     asyncio.create_task(_fetch_and_save(doc_id, url, state["uid"], state["uid"], bot, uname))
     await cb.message.edit_text(
-        f"✅ *Đã lưu thêm!*\n🔗 `{url}`\n\n🤖 _AI đang tự động tạo tags…_",
+        f"✅ *Đã lưu lại!*\n🔗 `{url}`\n\n🤖 _AI đang tạo tags mới…_",
         reply_markup=_web_kb().as_markup(),
         parse_mode="Markdown"
     )

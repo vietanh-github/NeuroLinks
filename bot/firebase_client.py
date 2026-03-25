@@ -140,6 +140,44 @@ def _rebuild_stats() -> dict:
     return {"total": total, "by_category": cats}
 
 
+# ── User activity tracking ─────────────────────────────────────────────────────
+
+def track_user_activity(user_id: int, username: str, link_delta: int = 0) -> None:
+    """Upsert a user document and optionally increment their link_count.
+
+    Called on every bot interaction (start, link sent, etc.).
+    Stored in the 'users' collection keyed by str(user_id).
+    """
+    ref = get_db().collection("users").document(str(user_id))
+    update: dict = {
+        "user_id":  user_id,
+        "username": username,
+        "last_seen": firestore.SERVER_TIMESTAMP,
+    }
+    if link_delta:
+        update["link_count"] = firestore.Increment(link_delta)
+    ref.set(update, merge=True)
+
+
+def get_all_users_with_stats() -> list[dict]:
+    """Return all tracked users sorted by link_count desc.
+
+    Each dict has: user_id, username, link_count, last_seen.
+    """
+    docs = list(get_db().collection("users").stream())
+    users = []
+    for d in docs:
+        data = d.to_dict()
+        users.append({
+            "user_id":    data.get("user_id", 0),
+            "username":   data.get("username", "—"),
+            "link_count": data.get("link_count", 0),
+            "last_seen":  data.get("last_seen"),
+        })
+    users.sort(key=lambda u: u["link_count"], reverse=True)
+    return users
+
+
 # ── Links CRUD ────────────────────────────────────────────────────────────────
 
 def add_link(url: str, category: str, user_id: int, username: str,

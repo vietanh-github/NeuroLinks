@@ -150,6 +150,8 @@ async def cmd_start(message: Message):
     if _can_admin(uid):
         b.button(text="⚙️ Admin Panel", callback_data="AM_START")
     b.adjust(1)
+    # Track this user’s first touch (no link delta)
+    fb.track_user_activity(uid, name)
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="Markdown")
 
 
@@ -313,36 +315,76 @@ async def cb_link_delete(cb: CallbackQuery):
         pass  # content unchanged — ignore
 
 
-# ── Callbacks: Users ──────────────────────────────────────────────────────────
-def _users_text(users: list[int]) -> str:
-    body = "\n".join(f"• `{u}`" for u in users) if users else "_Trống_"
-    return f"👥 **Users được phép** ({len(users)})\n\n{body}"
+# ── Callbacks: Users ─────────────────────────────────────────────────────────
+# “users” now means ALL users who have ever interacted with the bot,
+# with link count and last-seen time, sorted by activity.
+# Allowed-user whitelist is shown separately as a sub-section.
+
+def _fmt_last_seen(ts) -> str:
+    """Format a Firestore SERVER_TIMESTAMP for display."""
+    from datetime import datetime, timezone
+    if ts is None: return "—"
+    try:
+        d = ts.ToDatetime(tzinfo=timezone.utc)
+        s = (datetime.now(tz=timezone.utc) - d).total_seconds()
+        if s < 60:    return "vừa xong"
+        if s < 3600:  return f"{int(s//60)}ph trước"
+        if s < 86400: return f"{int(s//3600)}h trước"
+        return d.strftime("%d/%m/%Y")
+    except Exception:
+        return "—"
+
+def _tracked_users_text(users: list[dict], allowed: list[int], subs: list[int], admin_id: int) -> str:
+    if not users:
+        return "👥 **Thống kê Users**\n\n_Chưa có ai tương tác với bot._"
+    lines = [f"👥 **Thống kê Users** ({len(users)} người)\n"]
+    for u in users[:25]:  # cap at 25 to avoid message too long
+        uid   = u["user_id"]
+        name  = u["username"]
+        links = u["link_count"]
+        seen  = _fmt_last_seen(u.get("last_seen"))
+        if uid == admin_id:
+            badge = " 👑"
+        elif uid in subs:
+            badge = " 👮"
+        elif uid in allowed:
+            badge = " ✅"
+        else:
+            badge = ""
+        lines.append(f"• `{uid}` {name}{badge} — 🔗 {links} · {seen}")
+    lines.append("\n👑 Super  👮 Sub-admin  ✅ User")
+    return "\n".join(lines)
+
+def _kb_users_tracked(can_add: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if can_add:
+        b.button(text="➕ Thêm User", callback_data="AUAP")
+    b.button(text="🔙 Menu", callback_data="AM")
+    b.adjust(1)
+    return b.as_markup()
 
 @router.callback_query(F.data == "AU")
 async def cb_users(cb: CallbackQuery, state: FSMContext):
     if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
     await state.clear()
-    users = fb.get_allowed_users()
-    await cb.message.edit_text(_users_text(users),
-                               reply_markup=_kb_users(users, _is_super(cb.from_user.id)),
-                               parse_mode="Markdown")
+    tracked = fb.get_all_users_with_stats()
+    allowed = fb.get_allowed_users()
+    subs    = fb.get_sub_admins()
+    text    = _tracked_users_text(tracked, allowed, subs, ADMIN_ID)
+    try:
+        await cb.message.edit_text(text,
+                                   reply_markup=_kb_users_tracked(_is_super(cb.from_user.id)),
+                                   parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass
     await cb.answer()
-
-@router.callback_query(F.data.startswith("AUD:"))
-async def cb_user_delete(cb: CallbackQuery):
-    if not _is_super(cb.from_user.id): await cb.answer("⛔ Chỉ super admin.", show_alert=True); return
-    fb.remove_allowed_user(int(cb.data[4:]))
-    await cb.answer("✅ Đã xóa")
-    users = fb.get_allowed_users()
-    await cb.message.edit_text(_users_text(users),
-                               reply_markup=_kb_users(users, True), parse_mode="Markdown")
 
 @router.callback_query(F.data == "AUAP")
 async def cb_user_add_prompt(cb: CallbackQuery, state: FSMContext):
     if not _is_super(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
     await state.set_state(AdminFSM.adding_user)
     await cb.message.edit_text(
-        "👥 Nhập **Telegram User ID** cần thêm:\n_(Số nguyên — lấy từ @userinfobot)_",
+        "👥 Nhập **Telegram User ID** cần thêm vào whitelist:\n_(Số nguyên — lấy từ @userinfobot)_",
         reply_markup=_kb_cancel("AU"), parse_mode="Markdown")
     await cb.answer()
 
@@ -353,10 +395,12 @@ async def fsm_add_user(message: Message, state: FSMContext):
     except ValueError: await message.reply("❌ Nhập số nguyên hợp lệ."); return
     added = fb.add_allowed_user(uid)
     await state.clear()
-    users = fb.get_allowed_users()
-    prefix = f"✅ Đã thêm `{uid}`\n\n" if added else "⚠️ Đã tồn tại.\n\n"
-    await message.answer(prefix + _users_text(users),
-                         reply_markup=_kb_users(users, True), parse_mode="Markdown")
+    tracked = fb.get_all_users_with_stats()
+    allowed = fb.get_allowed_users()
+    subs    = fb.get_sub_admins()
+    prefix = f"✅ Đã thêm `{uid}` vào whitelist.\n\n" if added else "⚠️ Đã tồn tại.\n\n"
+    await message.answer(prefix + _tracked_users_text(tracked, allowed, subs, ADMIN_ID),
+                         reply_markup=_kb_users_tracked(True), parse_mode="Markdown")
 
 
 # ── Callbacks: Sub-admins (super admin only) ──────────────────────────────────

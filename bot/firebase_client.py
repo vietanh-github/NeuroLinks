@@ -166,6 +166,12 @@ def update_link_metadata(doc_id: str, title: str, description: str, og_image: st
         "og_image":    og_image,
     })
 
+def update_link_ai_tags(doc_id: str, tags: list[str]) -> None:
+    """Backfill AI-generated tags on an already-saved link document."""
+    get_db().collection("links").document(doc_id).update({
+        "ai_tags": tags,
+    })
+
 
 def find_link_by_url(url: str) -> dict | None:
     """Return existing link dict (with 'id') if URL already saved, else None."""

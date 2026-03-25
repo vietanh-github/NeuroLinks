@@ -10,6 +10,7 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import bot.firebase_client as fb
 from bot.metadata import fetch_metadata
+from bot.ai_tagger import ai_generate_tags
 
 router = Router()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -100,18 +101,22 @@ async def _process_url(url: str, user, reply_fn):
         )
         _pending_cat[sent.message_id] = {"uid": user.id, "doc_id": doc_id}
 
-# ── Background metadata fetch ────────────────────────────────────────────
+# ── Background metadata + AI tag fetch ──────────────────────────────────────────
 
 async def _fetch_and_save(doc_id: str, url: str) -> None:
-    """Fetch page metadata and write back to Firestore. Runs in background."""
+    """Fetch page metadata + AI tags and write back to Firestore. Runs in background."""
+    # 1. Fetch HTML metadata
     meta = await fetch_metadata(url)
-    if meta.get("title") or meta.get("description"):
-        fb.update_link_metadata(
-            doc_id,
-            title       = meta.get("title", ""),
-            description = meta.get("description", ""),
-            og_image    = meta.get("og_image", ""),
-        )
+    title       = meta.get("title", "")
+    description = meta.get("description", "")
+    og_image    = meta.get("og_image", "")
+    if title or description:
+        fb.update_link_metadata(doc_id, title=title, description=description, og_image=og_image)
+
+    # 2. AI auto-tagging (uses title + description as context for better tags)
+    tags = await ai_generate_tags(url, title=title, description=description)
+    if tags:
+        fb.update_link_ai_tags(doc_id, tags)
 
 # ── /add command ──────────────────────────────────────────────────────────────
 @router.message(Command("add"))

@@ -94,20 +94,28 @@ def _domain(url: str) -> str:
 def _links_text(links: list[dict], page: int, total_pages: int) -> str:
     lines = [f"🔗 **Links** — Trang {page+1}/{total_pages}\n"]
     for i, lk in enumerate(links, 1):
-        tags  = lk.get("ai_tags") or []
-        tag_str = "  " + "  ".join(f"#{t}" for t in tags[:2]) if tags else ""
-        title = lk.get("title") or _domain(lk.get("url", ""))
-        lines.append(f"{i}. **{title[:45]}**{tag_str}")
-    lines.append("\n_🗑 xóa_")
+        tags    = lk.get("ai_tags") or []
+        domain  = _domain(lk.get("url", ""))
+        title   = lk.get("title") or domain
+        tag_str = "  ".join(f"`{t}`" for t in tags[:2]) if tags else "_no tag_"
+        lines.append(
+            f"**{i}.** {title[:42]}\n"
+            f"    🌐 `{domain}`  🏷 {tag_str}"
+        )
+    lines.append("\n_Nhấn số 🗑 để xóa link tương ứng_")
     return "\n".join(lines)
 
+
 def _main_text(is_super: bool) -> str:
-    stats = fb.get_stats()
-    role  = "👑 Super Admin" if is_super else "👮 Sub-Admin"
+    stats  = fb.get_stats()
+    users  = fb.get_all_users_with_stats()
+    role   = "👑 Super Admin" if is_super else "👮 Sub-Admin"
+    active = sum(1 for u in users if u["link_count"] > 0)
     return (
         f"⚙️ **NeuroLinks — Admin Panel**\n"
         f"Vai trò: {role}\n\n"
-        f"📊 Tổng: **{stats['total']}** links đã lưu\n\n"
+        f"🔗 Links: **{stats['total']}**   "
+        f"👥 Users: **{len(users)}** ({active} active)\n\n"
         f"Chọn mục:"
     )
 
@@ -115,8 +123,8 @@ def _main_text(is_super: bool) -> str:
 # ── /start ────────────────────────────────────────────────────────────────────
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    uid  = message.from_user.id
-    name = message.from_user.first_name or "bạn"
+    uid   = message.from_user.id
+    name  = message.from_user.first_name or "bạn"
     stats = fb.get_stats()
     can_use = fb.is_user_allowed(uid, ADMIN_ID)
 
@@ -129,15 +137,18 @@ async def cmd_start(message: Message):
     else:
         role_badge = "🔒 Chưa được cấp quyền"
 
+    # Per-user stats
+    user_doc = fb.get_all_users_with_stats()
+    my_links = next((u["link_count"] for u in user_doc if u["user_id"] == uid), 0)
+
     text = (
         f"👋 Xin chào, **{name}**!\n\n"
-        f"╔═══════════════════════╗\n"
-        f"║  🧠 **NeuroLinks**          ║\n"
-        f"╚═══════════════════════╝\n\n"
-        f"Thu thập link từ Telegram và hiển thị trực tiếp trên web theo thời gian thực — tự động phân loại bằng AI.\n\n"
+        f"🧠 **NeuroLinks Bot**\n"
+        f"_Thu thập link • AI tự động tags • Realtime web_\n\n"
         f"━━━━━━━━━━━━━━━━\n"
-        f"👤 Vai trò của bạn: **{role_badge}**\n"
-        f"🔗 Tổng links đã lưu: **{stats['total']}**\n"
+        f"👤 **{name}** — {role_badge}\n"
+        f"🔗 Links bạn đã gửi: **{my_links}**\n"
+        f"🌍 Tổng hệ thống: **{stats['total']}** links\n"
         f"━━━━━━━━━━━━━━━━"
     )
     if not can_use:
@@ -147,11 +158,13 @@ async def cmd_start(message: Message):
     b.button(text="🌐 Xem NeuroLinks", url=WEB_URL)
     if can_use:
         b.button(text="📖 Hướng dẫn", callback_data="HELP")
+        b.button(text="⚙️ Cài đặt", callback_data="MYSETT")
     if _can_admin(uid):
-        b.button(text="⚙️ Admin Panel", callback_data="AM_START")
+        b.button(text="🔧 Admin Panel", callback_data="AM_START")
     b.adjust(1)
-    # Track this user’s first touch (no link delta)
-    fb.track_user_activity(uid, name)
+    # Track user (no link delta)
+    uname = f"@{message.from_user.username}" if message.from_user.username else name
+    fb.track_user_activity(uid, uname)
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="Markdown")
 
 
@@ -163,28 +176,28 @@ async def cmd_help(message: Message):
 async def _send_help(send_fn, uid: int):
     can_use = fb.is_user_allowed(uid, ADMIN_ID)
 
-    text = (
-        "📖 **Hướng dẫn — NeuroLinks Bot**\n\n"
-        "┌ 🏠 /start — Trang chủ & thống kê\n"
-        "├ 📖 /help  — Hướng dẫn này\n"
-        "├ 🌐 /web   — Mở NeuroLinks trên trình duyệt\n"
+    cmds = (
+        "🏠 /start — Dashboard cá nhân\n"
+        "📖 /help — Hướng dẫn này\n"
+        "🌐 /web — Mở NeuroLinks\n"
+        "⚙️ /settings — Thông báo khi xử lý xong"
     )
     if _can_admin(uid):
-        text += "└ ⚙️ /admin — Bảng điều khiển admin\n"
-    else:
-        text += "└ ─────────────────────────\n"
+        cmds += "\n🔧 /admin — Bảng điều khiển"
+
+    text = f"📖 **Hướng dẫn — NeuroLinks Bot**\n\n{cmds}\n"
 
     if can_use:
         text += (
-            "\n**📎 Cách gửi link:**\n"
-            "• Paste bất kỳ URL vào chat → bot lưu ngay\n"
-            "• Có thể gửi nhiều link cùng lúc trong một tin nhắn\n"
+            "\n📎 **Cách gửi link:**\n"
+            "• Paste bất kỳ URL vào chat → bot lưu ngay, AI tự động gán tags\n"
+            "• Gửi nhiều link cùng lúc trong một tin nhắn ↓\n"
             "• Dùng /add `<url>` để gửi theo lệnh\n\n"
-            "**🤖 AI tự động:**\n"
-            "• Bot trích xuất tiêu đề & mô tả trang web\n"
-            "• AI tự gán 1–3 tags phù hợp\n"
-            "• Website cập nhật realtime không cần reload\n\n"
-            "**⚠️ Link trùng?** Bot sẽ hỏi bạn muốn lưu thêm hay bỏ qua."
+            "🤖 **AI tự động:**\n"
+            "• Trích xuất tiêu đề + mô tả trang web\n"
+            "• Tự gán 1–3 tags phù hợp với nội dung\n"
+            "• 🔔 Thông báo khi xử lý xong (tắt được qua /settings)\n\n"
+            "• Link trùng? Bot hỏi bạn muốn lưu thêm hay bỏ qua."
         )
     else:
         text += "\n_💬 Liên hệ admin để được cấp quyền gửi link._"
@@ -224,6 +237,17 @@ async def cb_help(cb: CallbackQuery):
     await _send_help(cb.message.answer, cb.from_user.id)
     await cb.answer()
 
+@router.callback_query(F.data == "MYSETT")
+async def cb_my_settings(cb: CallbackQuery):
+    """Shortcut from /start ⚙️ Cài đặt → show settings panel."""
+    uid = cb.from_user.id
+    if not fb.is_user_allowed(uid, ADMIN_ID):
+        await cb.answer("⛔", show_alert=True); return
+    notify = fb.get_notify_pref(uid)
+    await cb.message.answer(_settings_text(notify), reply_markup=_settings_kb(notify), parse_mode="Markdown")
+    await cb.answer()
+
+
 
 # ── /admin ────────────────────────────────────────────────────────────────────
 @router.message(Command("admin"))
@@ -261,12 +285,35 @@ async def cb_main(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "ASTAT")
 async def cb_stats(cb: CallbackQuery):
     if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
-    stats = fb.get_stats()
-    lines = [f"📊 **Thống kê — NeuroLinks**\n\n🔗 Tổng: **{stats['total']}** links\n"]
-    if stats.get("by_category"):
-        lines.append("**Theo category (cũ):**")
-        for cat, n in sorted(stats["by_category"].items(), key=lambda x: -x[1]):
-            lines.append(f"  • {cat}: {n}")
+    stats  = fb.get_stats()
+    users  = fb.get_all_users_with_stats()
+    active = sum(1 for u in users if u["link_count"] > 0)
+
+    # Top AI tags from all users' data + global tags cache
+    all_tags = fb.get_all_ai_tags()
+    from collections import Counter
+    tag_counter = Counter(all_tags)
+    top_tags = tag_counter.most_common(10)
+
+    lines = [
+        f"📊 **Thống kê — NeuroLinks**\n",
+        f"🔗 Tổng links: **{stats['total']}**",
+        f"👥 Users: **{len(users)}** (active: **{active}**)",
+    ]
+    if top_tags:
+        lines.append("\n🏷 **Top AI Tags:**")
+        for tag, count in top_tags:
+            bar = "█" * min(count, 10)
+            lines.append(f"  `{tag}` — {bar} {count}")
+    else:
+        lines.append("\n_Chưa có AI tags nào._")
+
+    # Top contributors
+    if users:
+        lines.append("\n🏆 **Top contributors:**")
+        for u in users[:5]:
+            lines.append(f"  • {u['username']} — 🔗 {u['link_count']}")
+
     b = InlineKeyboardBuilder()
     b.button(text="🔙 Menu", callback_data="AM")
     await cb.message.edit_text("\n".join(lines), reply_markup=b.as_markup(), parse_mode="Markdown")
@@ -336,8 +383,12 @@ def _fmt_last_seen(ts) -> str:
 
 def _tracked_users_text(users: list[dict], allowed: list[int], subs: list[int], admin_id: int) -> str:
     if not users:
-        return "👥 **Thống kê Users**\n\n_Chưa có ai tương tác với bot._"
-    lines = [f"👥 **Thống kê Users** ({len(users)} người)\n"]
+        return "👥 **Users**\n\n_Chưa có ai tương tác với bot._"
+    total_links = sum(u["link_count"] for u in users)
+    active = sum(1 for u in users if u["link_count"] > 0)
+    lines = [
+        f"👥 **Users** — {len(users)} người • {active} active • 🔗 {total_links} links\n"
+    ]
     for u in users[:25]:  # cap at 25 to avoid message too long
         uid   = u["user_id"]
         name  = u["username"]
@@ -351,7 +402,8 @@ def _tracked_users_text(users: list[dict], allowed: list[int], subs: list[int], 
             badge = " ✅"
         else:
             badge = ""
-        lines.append(f"• `{uid}` {name}{badge} — 🔗 {links} · {seen}")
+        bar = "●" * min(links, 5)
+        lines.append(f"`{uid}` {name}{badge}\n    🔗 {links} {bar}  •  🕐 {seen}")
     lines.append("\n👑 Super  👮 Sub-admin  ✅ User")
     return "\n".join(lines)
 

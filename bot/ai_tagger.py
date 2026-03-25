@@ -1,7 +1,7 @@
 """AI-powered tag generator for NeuroLinks.
 
-Calls the custom AI API to suggest 1–3 category tags
-for a given URL, title, and description.
+Calls the custom AI API to suggest 1–3 category tags for a given URL.
+Accepts existing tags so the AI harmonises new tags with the current vocabulary.
 Never raises — returns [] on any error.
 """
 
@@ -23,11 +23,27 @@ def _api_key() -> str:
     return os.getenv("AI_TAGGER_API_KEY", "")
 
 
-def _build_messages(url: str, title: str, description: str) -> list[dict[str, str]]:
+def _build_messages(
+    url: str,
+    title: str,
+    description: str,
+    existing_tags: list[str],
+) -> list[dict[str, str]]:
     context_parts = [f"URL: {url}"]
     if title:       context_parts.append(f"Title: {title}")
     if description: context_parts.append(f"Description: {description}")
     context = "\n".join(context_parts)
+
+    # Build system prompt — include existing tag vocabulary when available
+    tag_hint = ""
+    if existing_tags:
+        vocab = ", ".join(f'"{t}"' for t in existing_tags[:60])  # cap at 60 tags
+        tag_hint = (
+            f"\n\nExisting tags already in use: [{vocab}]. "
+            "PREFER reusing one of these tags if it fits. "
+            "Only invent a NEW tag if none of the existing ones match well. "
+            "Never create a tag that is a near-duplicate of an existing tag (e.g. 'AI' vs 'Artificial Intelligence')."
+        )
 
     return [
         {
@@ -37,6 +53,7 @@ def _build_messages(url: str, title: str, description: str) -> list[dict[str, st
                 "Given a URL with its title and description, respond ONLY with a valid JSON array "
                 "of 1 to 3 short category tags in English (e.g. [\"AI\", \"Research\"]). "
                 "No explanations. No markdown. Just the JSON array."
+                + tag_hint
             ),
         },
         {
@@ -46,14 +63,23 @@ def _build_messages(url: str, title: str, description: str) -> list[dict[str, st
     ]
 
 
-async def ai_generate_tags(url: str, title: str = "", description: str = "") -> list[str]:
-    """Return 1–3 AI-suggested tags. Returns [] silently on any error."""
+async def ai_generate_tags(
+    url: str,
+    title: str = "",
+    description: str = "",
+    existing_tags: list[str] | None = None,
+) -> list[str]:
+    """Return 1–3 AI-suggested tags. Returns [] silently on any error.
+
+    Pass existing_tags (from firebase_client.get_all_ai_tags()) so the AI
+    harmonises new tags with the existing vocabulary.
+    """
     api_key = _api_key()
     if not api_key:
         logger.warning("AI_TAGGER_API_KEY not set — skipping AI tagging")
         return []
 
-    messages = _build_messages(url, title, description)
+    messages = _build_messages(url, title, description, existing_tags or [])
     payload: dict[str, Any] = {
         "model":    AI_MODEL,
         "messages": messages,
@@ -85,7 +111,6 @@ async def ai_generate_tags(url: str, title: str = "", description: str = "") -> 
         raw = data["choices"][0]["message"]["content"].strip()
         tags = json.loads(raw)
         if isinstance(tags, list):
-            # Sanitise: take first 3, each max 40 chars, string only
             return [str(t).strip()[:40] for t in tags[:3] if str(t).strip()]
         return []
 

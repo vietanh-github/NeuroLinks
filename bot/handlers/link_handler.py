@@ -95,9 +95,13 @@ async def _fetch_and_save(doc_id: str, url: str) -> None:
     if title or description:
         fb.update_link_metadata(doc_id, title=title, description=description, og_image=og_image)
 
-    tags = await ai_generate_tags(url, title=title, description=description)
+    # Fetch existing tags so AI can harmonise (reuse existing, avoid near-duplicates)
+    existing_tags = fb.get_all_ai_tags()
+    tags = await ai_generate_tags(url, title=title, description=description,
+                                  existing_tags=existing_tags)
     if tags:
         fb.update_link_ai_tags(doc_id, tags)
+
 
 # ── /add command ──────────────────────────────────────────────────────────────
 @router.message(Command("add"))

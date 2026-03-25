@@ -173,6 +173,22 @@ def update_link_ai_tags(doc_id: str, tags: list[str]) -> None:
     })
 
 
+def get_all_ai_tags() -> list[str]:
+    """Return a sorted, deduplicated list of all AI tags currently in use.
+
+    Scans the links collection and aggregates all ai_tags values.
+    Used to pass as context to the AI so new tags are harmonised with existing ones.
+    """
+    tags: set[str] = set()
+    docs = get_db().collection("links").select(["ai_tags"]).stream()
+    for d in docs:
+        for t in (d.to_dict().get("ai_tags") or []):
+            if t:
+                tags.add(t)
+    return sorted(tags)
+
+
+
 def find_link_by_url(url: str) -> dict | None:
     """Return existing link dict (with 'id') if URL already saved, else None."""
     docs = list(

@@ -200,7 +200,7 @@ async def dup_cancel(cb: CallbackQuery):
 
 @router.callback_query(F.data == "dupDEL")
 async def dup_delete(cb: CallbackQuery):
-    """Xóa link cũ, lưu link mới (replace)."""
+    """Xóa sạch link cũ, không lưu thêm gì."""
     mid = cb.message.message_id
     state = _pending_dup.pop(mid, None)
     if not state: await cb.answer("⚠️ Đã hết hạn.", show_alert=True); return
@@ -208,23 +208,13 @@ async def dup_delete(cb: CallbackQuery):
         _pending_dup[mid] = state
         await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
 
-    url      = state["url"]
     existing = state["existing"]
-    bot      = state.get("bot")
-    uname    = _username(cb.from_user)
-
-    # 1. Delete old entry
+    url      = state["url"]
     if existing.get("id"):
         fb.delete_link(existing["id"])
 
-    # 2. Save new entry + background enrichment
-    doc_id = fb.add_link(url=url, category="", user_id=state["uid"], username=uname)
-    asyncio.create_task(asyncio.to_thread(fb.track_user_activity, state["uid"], uname, 1))
-    asyncio.create_task(_fetch_and_save(doc_id, url, state["uid"], state["uid"], bot, uname))
-
     await cb.message.edit_text(
-        f"🗑 *Đã xóa link cũ và lưu lại!*\n🔗 `{url}`\n\n🤖 _AI đang tự động tạo tags…_",
-        reply_markup=_web_kb().as_markup(),
+        f"🗑 *Đã xóa link!*\n🔗 `{url}`",
         parse_mode="Markdown"
     )
-    await cb.answer("✅ Đã thay thế")
+    await cb.answer("✅ Đã xóa")

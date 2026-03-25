@@ -49,8 +49,9 @@ def _web_kb() -> InlineKeyboardBuilder:
 def _dup_kb() -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Vẫn lưu thêm", callback_data="dupS")
-    b.button(text="❌ Bỏ qua",        callback_data="dupX")
-    b.adjust(1)
+    b.button(text="🗑 Xóa",          callback_data="dupDEL")
+    b.button(text="❌ Bỏ qua",       callback_data="dupX")
+    b.adjust(2, 1)  # row1: [Lưu thêm | Xóa], row2: [Bỏ qua]
     return b
 
 # ── Core: process URL ─────────────────────────────────────────────────────────
@@ -195,3 +196,35 @@ async def dup_cancel(cb: CallbackQuery):
         await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
     await cb.message.edit_text("❌ *Đã bỏ qua.* Link không được lưu thêm.", parse_mode="Markdown")
     await cb.answer()
+
+
+@router.callback_query(F.data == "dupDEL")
+async def dup_delete(cb: CallbackQuery):
+    """Xóa link cũ, lưu link mới (replace)."""
+    mid = cb.message.message_id
+    state = _pending_dup.pop(mid, None)
+    if not state: await cb.answer("⚠️ Đã hết hạn.", show_alert=True); return
+    if cb.from_user.id != state["uid"]:
+        _pending_dup[mid] = state
+        await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
+
+    url      = state["url"]
+    existing = state["existing"]
+    bot      = state.get("bot")
+    uname    = _username(cb.from_user)
+
+    # 1. Delete old entry
+    if existing.get("id"):
+        fb.delete_link(existing["id"])
+
+    # 2. Save new entry + background enrichment
+    doc_id = fb.add_link(url=url, category="", user_id=state["uid"], username=uname)
+    asyncio.create_task(asyncio.to_thread(fb.track_user_activity, state["uid"], uname, 1))
+    asyncio.create_task(_fetch_and_save(doc_id, url, state["uid"], state["uid"], bot, uname))
+
+    await cb.message.edit_text(
+        f"🗑 *Đã xóa link cũ và lưu lại!*\n🔗 `{url}`\n\n🤖 _AI đang tự động tạo tags…_",
+        reply_markup=_web_kb().as_markup(),
+        parse_mode="Markdown"
+    )
+    await cb.answer("✅ Đã thay thế")

@@ -74,9 +74,9 @@ async def _process_url(url: str, user, reply_fn):
         )
         _pending_dup[sent.message_id] = {"uid": user.id, "url": url, "existing": existing}
     else:
-        # New link — save immediately, track user, fire background enrichment, reply
+        # New link — save immediately, track user in background, fire enrichment, reply
         doc_id = fb.add_link(url=url, category="", user_id=user.id, username=_username(user))
-        fb.track_user_activity(user.id, _username(user), link_delta=1)
+        asyncio.create_task(asyncio.to_thread(fb.track_user_activity, user.id, _username(user), 1))
         asyncio.create_task(_fetch_and_save(doc_id, url))
         await reply_fn(
             f"✅ *Đã lưu link!*\n🔗 `{url}`\n\n"

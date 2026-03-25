@@ -1,12 +1,17 @@
 """Firebase Admin SDK client for NeuroLinks bot.
 
 Scalability design:
-- Pagination uses Firestore .offset() + .limit() + count() aggregation — no full scans.
-- Stats are maintained in a dedicated `stats/links` document updated atomically on
-  every add/delete, so get_stats() is a single document read (O(1)).
+- Settings are cached in-process for 60 s (TTL) to avoid a Firestore read on
+  every incoming message.  Writes invalidate the cache immediately.
+- Stats are maintained in a dedicated `stats/links` document updated atomically
+  on every add/delete, so get_stats() is O(1).
+- Pagination uses Firestore .offset() + .limit() — no full scans.
+- AI-tag vocabulary is cached for 120 s to avoid a full collection scan on
+  every link submission.
 """
 
 import os
+import time
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1 import aggregation
@@ -28,7 +33,7 @@ def get_db():
     return _db
 
 
-# ── Settings ──────────────────────────────────────────────────────────────────
+# ── Settings (with TTL cache) ─────────────────────────────────────────────────
 
 DEFAULT_SETTINGS = {
     "categories":      ["AI", "ML", "Tools", "News", "Other"],
@@ -36,18 +41,48 @@ DEFAULT_SETTINGS = {
     "sub_admin_ids":   [],
 }
 
+_settings_cache: dict | None = None
+_settings_cache_ts: float = 0.0
+_SETTINGS_TTL = 60.0  # seconds
+
+# AI tags cache — avoids full collection scan on every link save
+_ai_tags_cache: list[str] | None = None
+_ai_tags_cache_ts: float = 0.0
+_AI_TAGS_TTL = 120.0  # seconds
+
+
+def _settings_cache_valid() -> bool:
+    return _settings_cache is not None and (time.monotonic() - _settings_cache_ts) < _SETTINGS_TTL
+
+
+def invalidate_settings_cache() -> None:
+    """Force the next get_settings() call to re-read from Firestore."""
+    global _settings_cache, _settings_cache_ts
+    _settings_cache = None
+    _settings_cache_ts = 0.0
+
+
 def get_settings() -> dict:
+    global _settings_cache, _settings_cache_ts
+    if _settings_cache_valid():
+        return _settings_cache  # type: ignore[return-value]
     ref = get_db().collection("settings").document("main")
     doc = ref.get()
     if doc.exists:
         data = DEFAULT_SETTINGS.copy()
         data.update(doc.to_dict())
-        return data
-    ref.set(DEFAULT_SETTINGS)
-    return DEFAULT_SETTINGS.copy()
+    else:
+        ref.set(DEFAULT_SETTINGS)
+        data = DEFAULT_SETTINGS.copy()
+    _settings_cache = data
+    _settings_cache_ts = time.monotonic()
+    return data
+
 
 def save_settings(data: dict) -> None:
     get_db().collection("settings").document("main").set(data, merge=True)
+    invalidate_settings_cache()  # stale immediately after write
+
 
 # ── Categories ────────────────────────────────────────────────────────────────
 
@@ -99,7 +134,7 @@ def is_sub_admin(user_id: int, admin_id: int) -> bool:
 
 def is_user_allowed(user_id: int, admin_id: int) -> bool:
     if user_id == admin_id: return True
-    s = get_settings()
+    s = get_settings()  # O(1) from cache after first call
     return user_id in s.get("sub_admin_ids", []) or user_id in s.get("allowed_user_ids", [])
 
 
@@ -107,6 +142,7 @@ def is_user_allowed(user_id: int, admin_id: int) -> bool:
 
 def _stats_ref():
     return get_db().collection("stats").document("links")
+
 
 def _increment_stats(category: str, delta: int = 1):
     """Atomically increment total and per-category counter."""
@@ -209,22 +245,30 @@ def update_link_ai_tags(doc_id: str, tags: list[str]) -> None:
     get_db().collection("links").document(doc_id).update({
         "ai_tags": tags,
     })
+    # Invalidate tag vocabulary cache so next AI tagging call sees fresh tags
+    global _ai_tags_cache, _ai_tags_cache_ts
+    _ai_tags_cache = None
+    _ai_tags_cache_ts = 0.0
 
 
 def get_all_ai_tags() -> list[str]:
     """Return a sorted, deduplicated list of all AI tags currently in use.
 
-    Scans the links collection and aggregates all ai_tags values.
-    Used to pass as context to the AI so new tags are harmonised with existing ones.
+    Result is cached for 120 s to avoid a full collection scan on every link save.
     """
+    global _ai_tags_cache, _ai_tags_cache_ts
+    if _ai_tags_cache is not None and (time.monotonic() - _ai_tags_cache_ts) < _AI_TAGS_TTL:
+        return _ai_tags_cache
     tags: set[str] = set()
     docs = get_db().collection("links").select(["ai_tags"]).stream()
     for d in docs:
         for t in (d.to_dict().get("ai_tags") or []):
             if t:
                 tags.add(t)
-    return sorted(tags)
-
+    result = sorted(tags)
+    _ai_tags_cache = result
+    _ai_tags_cache_ts = time.monotonic()
+    return result
 
 
 def find_link_by_url(url: str) -> dict | None:

@@ -18,6 +18,24 @@ AI_API_URL = "https://ai.cuti.uk/v1/chat/completions"
 AI_MODEL   = "codex/gpt-5-codex-mini"
 AI_TIMEOUT = 60.0  # seconds
 
+# Shared client — reuses TCP connections (keep-alive) across all AI API calls
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Return (or lazily create) the shared httpx.AsyncClient."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=AI_TIMEOUT,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {_api_key()}",
+            },
+            http2=False,  # most custom APIs don't support h2; disable to avoid handshake cost
+        )
+    return _http_client
+
 
 def _api_key() -> str:
     return os.getenv("AI_TAGGER_API_KEY", "")
@@ -87,15 +105,7 @@ async def ai_generate_tags(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=AI_TIMEOUT) as client:
-            resp = await client.post(
-                AI_API_URL,
-                json=payload,
-                headers={
-                    "Content-Type":  "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-            )
+        resp = await _get_client().post(AI_API_URL, json=payload)
 
         if resp.status_code == 401:
             logger.warning("🔑 AI tagger: 401 Unauthorized — API key sai hoặc hết hạn")

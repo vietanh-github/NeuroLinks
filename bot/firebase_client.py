@@ -142,17 +142,30 @@ def _rebuild_stats() -> dict:
 
 # ── Links CRUD ────────────────────────────────────────────────────────────────
 
-def add_link(url: str, category: str, user_id: int, username: str) -> str:
+def add_link(url: str, category: str, user_id: int, username: str,
+             title: str = "", description: str = "", og_image: str = "") -> str:
     doc_ref = get_db().collection("links").document()
     doc_ref.set({
-        "url":        url,
-        "category":   category,
-        "user_id":    str(user_id),
-        "username":   username or f"user_{user_id}",
-        "created_at": firestore.SERVER_TIMESTAMP,
+        "url":         url,
+        "category":    category,
+        "user_id":     str(user_id),
+        "username":    username or f"user_{user_id}",
+        "created_at":  firestore.SERVER_TIMESTAMP,
+        "title":       title,
+        "description": description,
+        "og_image":    og_image,
     })
     _increment_stats(category, +1)
     return doc_ref.id
+
+def update_link_metadata(doc_id: str, title: str, description: str, og_image: str) -> None:
+    """Backfill metadata fields on an already-saved link document."""
+    get_db().collection("links").document(doc_id).update({
+        "title":       title,
+        "description": description,
+        "og_image":    og_image,
+    })
+
 
 def find_link_by_url(url: str) -> dict | None:
     """Return existing link dict (with 'id') if URL already saved, else None."""

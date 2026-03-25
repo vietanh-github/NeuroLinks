@@ -2,12 +2,14 @@
 
 import re
 import os
+import asyncio
 from datetime import datetime, timezone
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import bot.firebase_client as fb
+from bot.metadata import fetch_metadata
 
 router = Router()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -85,6 +87,8 @@ async def _process_url(url: str, user, reply_fn):
         # New link — save immediately then ask for category
         doc_id = fb.add_link(url=url, category=DEFAULT_CATEGORY,
                              user_id=user.id, username=_username(user))
+        # Fire background metadata fetch (does NOT block the reply)
+        asyncio.create_task(_fetch_and_save(doc_id, url))
         # Category picker + web button together
         b = _cat_kb()
         b.button(text="🌐 Xem trên NeuroLinks", url=WEB_URL)
@@ -95,6 +99,19 @@ async def _process_url(url: str, user, reply_fn):
             parse_mode="Markdown"
         )
         _pending_cat[sent.message_id] = {"uid": user.id, "doc_id": doc_id}
+
+# ── Background metadata fetch ────────────────────────────────────────────
+
+async def _fetch_and_save(doc_id: str, url: str) -> None:
+    """Fetch page metadata and write back to Firestore. Runs in background."""
+    meta = await fetch_metadata(url)
+    if meta.get("title") or meta.get("description"):
+        fb.update_link_metadata(
+            doc_id,
+            title       = meta.get("title", ""),
+            description = meta.get("description", ""),
+            og_image    = meta.get("og_image", ""),
+        )
 
 # ── /add command ──────────────────────────────────────────────────────────────
 @router.message(Command("add"))

@@ -443,3 +443,46 @@ async def fsm_add_subadmin(message: Message, state: FSMContext):
     subs = fb.get_sub_admins()
     prefix = f"✅ Đã thêm sub-admin `{uid}`\n\n" if added else "⚠️ Đã tồn tại.\n\n"
     await message.answer(prefix + _subs_text(subs), reply_markup=_kb_subadmins(subs), parse_mode="Markdown")
+
+
+# ── /settings — per-user notification toggle ─────────────────────────────────
+
+def _settings_text(notify: bool) -> str:
+    status = "🔔 **Bật**" if notify else "🔕 **Tắt**"
+    return (
+        "⚙️ **Cài đặt cá nhân**\n\n"
+        f"Thông báo khi bot xử lý xong link: {status}\n\n"
+        "_Khi bật: bot sẽ gửi thêm một tin nhắn với tiêu đề trang web và tags AI sau khi xử lý xong._"
+    )
+
+def _settings_kb(notify: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    label = "🔕 Tắt thông báo" if notify else "🔔 Bật thông báo"
+    b.button(text=label, callback_data="USETT_NOTIFY")
+    b.adjust(1)
+    return b.as_markup()
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message):
+    uid = message.from_user.id
+    if not fb.is_user_allowed(uid, ADMIN_ID):
+        await message.reply("⛔ Bạn không có quyền sử dụng bot này."); return
+    notify = fb.get_notify_pref(uid)
+    await message.answer(_settings_text(notify), reply_markup=_settings_kb(notify), parse_mode="Markdown")
+
+@router.callback_query(F.data == "USETT_NOTIFY")
+async def cb_toggle_notify(cb: CallbackQuery):
+    uid = cb.from_user.id
+    if not fb.is_user_allowed(uid, ADMIN_ID):
+        await cb.answer("⛔", show_alert=True); return
+    current = fb.get_notify_pref(uid)
+    new_val = not current
+    fb.set_notify_pref(uid, new_val)
+    status = "🔔 Đã bật" if new_val else "🔕 Đã tắt"
+    await cb.answer(f"{status} thông báo")
+    try:
+        await cb.message.edit_text(_settings_text(new_val),
+                                   reply_markup=_settings_kb(new_val),
+                                   parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass

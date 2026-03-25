@@ -214,6 +214,24 @@ def get_all_users_with_stats() -> list[dict]:
     return users
 
 
+def get_notify_pref(user_id: int) -> bool:
+    """Return True if the user wants a follow-up notification when their link is processed.
+    Defaults to True if not set.
+    """
+    ref = get_db().collection("users").document(str(user_id))
+    doc = ref.get()
+    if doc.exists:
+        return doc.to_dict().get("notify_done", True)
+    return True
+
+
+def set_notify_pref(user_id: int, enabled: bool) -> None:
+    """Persist the notify_done preference for a user."""
+    get_db().collection("users").document(str(user_id)).set(
+        {"notify_done": enabled}, merge=True
+    )
+
+
 # ── Links CRUD ────────────────────────────────────────────────────────────────
 
 def add_link(url: str, category: str, user_id: int, username: str,

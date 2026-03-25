@@ -22,10 +22,11 @@ log = logging.getLogger(__name__)
 
 
 _COMMANDS = [
-    BotCommand(command="start",  description="🏠 Trang chủ & thống kê"),
-    BotCommand(command="help",   description="📖 Hướng dẫn sử dụng"),
-    BotCommand(command="web",    description="🌐 Mở NeuroLinks trên web"),
-    BotCommand(command="admin",  description="⚙️ Bảng điều khiển (admin)"),
+    BotCommand(command="start",    description="🏠 Trang chủ & thống kê"),
+    BotCommand(command="help",     description="📖 Hướng dẫn sử dụng"),
+    BotCommand(command="web",      description="🌐 Mở NeuroLinks trên web"),
+    BotCommand(command="settings", description="⚙️ Cài đặt cá nhân (thông báo)"),
+    BotCommand(command="admin",    description="🔧 Bảng điều khiển (admin)"),
 ]
 
 

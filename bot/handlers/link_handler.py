@@ -7,8 +7,8 @@ import re
 import os
 import asyncio
 from datetime import datetime, timezone
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram import Bot, Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import bot.firebase_client as fb
@@ -55,7 +55,7 @@ def _dup_kb() -> InlineKeyboardBuilder:
 
 # ── Core: process URL ─────────────────────────────────────────────────────────
 
-async def _process_url(url: str, user, reply_fn):
+async def _process_url(url: str, user, reply_fn, bot: Bot | None = None):
     """Check for duplicate, then either notify or save immediately."""
     existing = fb.find_link_by_url(url)
 
@@ -72,12 +72,12 @@ async def _process_url(url: str, user, reply_fn):
             reply_markup=_dup_kb().as_markup(),
             parse_mode="Markdown"
         )
-        _pending_dup[sent.message_id] = {"uid": user.id, "url": url, "existing": existing}
+        _pending_dup[sent.message_id] = {"uid": user.id, "url": url, "existing": existing, "bot": bot}
     else:
-        # New link — save immediately, track user in background, fire enrichment, reply
+        # New link — save, track user in background, fire enrichment, reply
         doc_id = fb.add_link(url=url, category="", user_id=user.id, username=_username(user))
         asyncio.create_task(asyncio.to_thread(fb.track_user_activity, user.id, _username(user), 1))
-        asyncio.create_task(_fetch_and_save(doc_id, url))
+        asyncio.create_task(_fetch_and_save(doc_id, url, user.id, user.id, bot))
         await reply_fn(
             f"✅ *Đã lưu link!*\n🔗 `{url}`\n\n"
             f"🤖 _AI đang tự động tạo tags…_",
@@ -85,10 +85,16 @@ async def _process_url(url: str, user, reply_fn):
             parse_mode="Markdown"
         )
 
-# ── Background metadata + AI tag fetch ──────────────────────────────────────────
+# ── Background metadata + AI tag fetch ─────────────────────────────────────────────────────────
 
-async def _fetch_and_save(doc_id: str, url: str) -> None:
-    """Fetch page metadata + AI tags and write back to Firestore. Runs in background."""
+async def _fetch_and_save(doc_id: str, url: str,
+                          user_id: int = 0, chat_id: int = 0,
+                          bot: Bot | None = None) -> None:
+    """Fetch page metadata + AI tags and write back to Firestore. Runs in background.
+
+    If `bot` is provided and the user has notify_done=True, sends a follow-up
+    message with the extracted title and AI-generated tags.
+    """
     meta = await fetch_metadata(url)
     title       = meta.get("title", "")
     description = meta.get("description", "")
@@ -103,6 +109,25 @@ async def _fetch_and_save(doc_id: str, url: str) -> None:
     if tags:
         fb.update_link_ai_tags(doc_id, tags)
 
+    # ── Follow-up notification ────────────────────────────────────
+    if bot and chat_id and user_id:
+        try:
+            notify = await asyncio.to_thread(fb.get_notify_pref, user_id)
+        except Exception:
+            notify = True
+        if notify:
+            title_line = f"📌 *{title}*\n" if title else ""
+            tag_line   = "  ".join(f"`{t}`" for t in tags) if tags else "_chưa phân loại_"
+            text = (
+                f"✅ *Xử lý xong!*\n"
+                f"{title_line}"
+                f"🏷 Tags: {tag_line}"
+            )
+            try:
+                await bot.send_message(chat_id, text, parse_mode="Markdown")
+            except Exception:
+                pass  # silently ignore send failures
+
 
 # ── /add command ──────────────────────────────────────────────────────────────
 @router.message(Command("add"))
@@ -115,7 +140,7 @@ async def cmd_add(message: Message):
     url = parts[1].strip()
     if not URL_RE.match(url):
         await message.reply("❌ URL không hợp lệ."); return
-    await _process_url(url, message.from_user, message.reply)
+    await _process_url(url, message.from_user, message.reply, bot=message.bot)
 
 
 # ── Auto-detect URL ───────────────────────────────────────────────────────────
@@ -126,7 +151,7 @@ async def auto_detect(message: Message):
     if not urls: return
     urls = list(dict.fromkeys(urls))
     for url in urls:
-        await _process_url(url, message.from_user, message.reply)
+        await _process_url(url, message.from_user, message.reply, bot=message.bot)
 
 
 # ── Duplicate decision callbacks ──────────────────────────────────────────────
@@ -141,8 +166,9 @@ async def dup_save(cb: CallbackQuery):
         await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
 
     url    = state["url"]
+    bot    = state.get("bot")
     doc_id = fb.add_link(url=url, category="", user_id=state["uid"], username=_username(cb.from_user))
-    asyncio.create_task(_fetch_and_save(doc_id, url))
+    asyncio.create_task(_fetch_and_save(doc_id, url, state["uid"], state["uid"], bot))
     await cb.message.edit_text(
         f"✅ *Đã lưu thêm!*\n🔗 `{url}`\n\n🤖 _AI đang tự động tạo tags…_",
         reply_markup=_web_kb().as_markup(),

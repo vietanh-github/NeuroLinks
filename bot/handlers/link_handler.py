@@ -15,11 +15,10 @@ URL_RE = re.compile(r"https?://[^\s/$.?#].[^\s]*", re.IGNORECASE)
 DEFAULT_CATEGORY = "Chưa phân loại"
 WEB_URL = "https://linva.net/NeuroLinks"
 
-# _pending_cat: user_id → doc_id   (new link saved, waiting for category pick)
-# _pending_dup: user_id → {url, existing: dict}  (duplicate detected, awaiting decision)
-_pending_cat: dict[int, str]   = {}
+# _pending_cat: message_id → {"uid": int, "doc_id": str}
+# _pending_dup: message_id → {"uid": int, "url": str, "existing": dict}
+_pending_cat: dict[int, dict]  = {}
 _pending_dup: dict[int, dict]  = {}
-
 
 def _allowed(uid: int) -> bool:
     return fb.is_user_allowed(uid, ADMIN_ID)
@@ -46,19 +45,19 @@ def _web_kb() -> InlineKeyboardBuilder:
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
-def _cat_kb(user_id: int) -> InlineKeyboardBuilder:
+def _cat_kb() -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
     for cat in fb.get_categories():
-        b.button(text=cat, callback_data=f"cat:{user_id}:{cat}")
-    b.button(text="⏩ Bỏ qua", callback_data=f"catskip:{user_id}")
+        b.button(text=cat, callback_data=f"cat:{cat}")
+    b.button(text="⏩ Bỏ qua", callback_data="catskip")
     b.adjust(3)
     return b
 
-def _dup_kb(user_id: int) -> InlineKeyboardBuilder:
+def _dup_kb() -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Vẫn lưu thêm",      callback_data=f"dupS:{user_id}")
-    b.button(text="🔄 Đổi category bản cũ", callback_data=f"dupU:{user_id}")
-    b.button(text="❌ Bỏ qua",             callback_data=f"dupX:{user_id}")
+    b.button(text="✅ Vẫn lưu thêm",      callback_data="dupS")
+    b.button(text="🔄 Đổi category bản cũ", callback_data="dupU")
+    b.button(text="❌ Bỏ qua",             callback_data="dupX")
     b.adjust(1)
     return b
 
@@ -70,32 +69,32 @@ async def _process_url(url: str, user, reply_fn):
 
     if existing:
         # Duplicate detected — store state, ask user
-        _pending_dup[user.id] = {"url": url, "existing": existing}
         cat   = existing.get("category", "—")
         uname = existing.get("username", "—")
         ts    = _fmt_time(existing.get("created_at"))
-        await reply_fn(
+        sent = await reply_fn(
             f"⚠️ *Link này đã được lưu trước đó!*\n\n"
             f"🔗 `{url}`\n"
             f"📁 {cat}  ·  👤 {uname}  ·  🕐 {ts}\n\n"
             f"Bạn muốn làm gì?",
-            reply_markup=_dup_kb(user.id).as_markup(),
+            reply_markup=_dup_kb().as_markup(),
             parse_mode="Markdown"
         )
+        _pending_dup[sent.message_id] = {"uid": user.id, "url": url, "existing": existing}
     else:
         # New link — save immediately then ask for category
         doc_id = fb.add_link(url=url, category=DEFAULT_CATEGORY,
                              user_id=user.id, username=_username(user))
-        _pending_cat[user.id] = doc_id
         # Category picker + web button together
-        b = _cat_kb(user.id)
+        b = _cat_kb()
         b.button(text="🌐 Xem trên NeuroLinks", url=WEB_URL)
         b.adjust(3, 1, 1)  # 3 cats per row, skip button, web button
-        await reply_fn(
+        sent = await reply_fn(
             f"✅ *Đã lưu link!*\n🔗 `{url}`\n📁 _{DEFAULT_CATEGORY}_\n\nChọn category để cập nhật:",
             reply_markup=b.as_markup(),
             parse_mode="Markdown"
         )
+        _pending_cat[sent.message_id] = {"uid": user.id, "doc_id": doc_id}
 
 # ── /add command ──────────────────────────────────────────────────────────────
 @router.message(Command("add"))
@@ -130,50 +129,66 @@ async def auto_detect(message: Message):
     if not _allowed(message.from_user.id): return
     urls = URL_RE.findall(message.text)
     if not urls: return
-    await _process_url(urls[0], message.from_user, message.reply)
+    # Deduplicate URLs in the same message while preserving order
+    urls = list(dict.fromkeys(urls))
+    for url in urls:
+        await _process_url(url, message.from_user, message.reply)
 
 
 # ── Duplicate decision callbacks ──────────────────────────────────────────────
 
-@router.callback_query(F.data.startswith("dupS:"))
+@router.callback_query(F.data == "dupS")
 async def dup_save(cb: CallbackQuery):
-    uid = int(cb.data.split(":")[1])
-    if cb.from_user.id != uid: await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
-    state = _pending_dup.pop(uid, None)
+    mid = cb.message.message_id
+    state = _pending_dup.pop(mid, None)
     if not state: await cb.answer("⚠️ Đã hết hạn.", show_alert=True); return
+    if cb.from_user.id != state["uid"]:
+        _pending_dup[mid] = state
+        await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
 
-    url    = state["url"]
+    url = state["url"]
     doc_id = fb.add_link(url=url, category=DEFAULT_CATEGORY,
-                         user_id=uid, username=_username(cb.from_user))
-    _pending_cat[uid] = doc_id
+                         user_id=state["uid"], username=_username(cb.from_user))
+    
+    b = _cat_kb()
+    b.button(text="🌐 Xem trên NeuroLinks", url=WEB_URL)
+    b.adjust(3, 1, 1)
+
+    _pending_cat[mid] = {"uid": state["uid"], "doc_id": doc_id}
     await cb.message.edit_text(
         f"✅ *Đã lưu thêm!*\n🔗 `{url}`\n📁 _{DEFAULT_CATEGORY}_\n\nChọn category:",
-        reply_markup=_cat_kb(uid).as_markup(),
+        reply_markup=b.as_markup(),
         parse_mode="Markdown"
     )
     await cb.answer()
 
-@router.callback_query(F.data.startswith("dupU:"))
+@router.callback_query(F.data == "dupU")
 async def dup_update(cb: CallbackQuery):
-    uid = int(cb.data.split(":")[1])
-    if cb.from_user.id != uid: await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
-    state = _pending_dup.pop(uid, None)
+    mid = cb.message.message_id
+    state = _pending_dup.pop(mid, None)
     if not state: await cb.answer("⚠️ Đã hết hạn.", show_alert=True); return
+    if cb.from_user.id != state["uid"]:
+        _pending_dup[mid] = state
+        await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
 
     # Reuse the existing doc — put it in pending_cat to update category
-    _pending_cat[uid] = state["existing"]["id"]
+    _pending_cat[mid] = {"uid": state["uid"], "doc_id": state["existing"]["id"]}
     await cb.message.edit_text(
         f"🔄 Chọn category mới cho bản *đã có*:",
-        reply_markup=_cat_kb(uid).as_markup(),
+        reply_markup=_cat_kb().as_markup(),
         parse_mode="Markdown"
     )
     await cb.answer()
 
-@router.callback_query(F.data.startswith("dupX:"))
+@router.callback_query(F.data == "dupX")
 async def dup_cancel(cb: CallbackQuery):
-    uid = int(cb.data.split(":")[1])
-    if cb.from_user.id != uid: await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
-    _pending_dup.pop(uid, None)
+    mid = cb.message.message_id
+    state = _pending_dup.pop(mid, None)
+    if not state: await cb.answer("⚠️ Đã hết hạn.", show_alert=True); return
+    if cb.from_user.id != state["uid"]:
+        _pending_dup[mid] = state
+        await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
+
     await cb.message.edit_text("❌ *Đã bỏ qua.* Link không được lưu thêm.", parse_mode="Markdown")
     await cb.answer()
 
@@ -182,12 +197,16 @@ async def dup_cancel(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("cat:"))
 async def on_cat_selected(cb: CallbackQuery):
-    _, uid_str, cat = cb.data.split(":", 2)
-    uid = int(uid_str)
-    if cb.from_user.id != uid: await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
-    doc_id = _pending_cat.pop(uid, None)
-    if not doc_id: await cb.answer("⚠️ Không tìm thấy link.", show_alert=True); return
-    fb.update_link_category(doc_id, cat)
+    mid = cb.message.message_id
+    cat = cb.data.split(":", 1)[1]
+    
+    state = _pending_cat.pop(mid, None)
+    if not state: await cb.answer("⚠️ Không tìm thấy link.", show_alert=True); return
+    if cb.from_user.id != state["uid"]:
+        _pending_cat[mid] = state
+        await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
+        
+    fb.update_link_category(state["doc_id"], cat)
     await cb.message.edit_text(
         f"✅ *Đã cập nhật category!*\n📁 **{cat}**",
         reply_markup=_web_kb().as_markup(),
@@ -195,10 +214,14 @@ async def on_cat_selected(cb: CallbackQuery):
     )
     await cb.answer(f"✅ Category: {cat}")
 
-@router.callback_query(F.data.startswith("catskip:"))
+@router.callback_query(F.data == "catskip")
 async def on_cat_skip(cb: CallbackQuery):
-    uid = int(cb.data.split(":")[1])
-    if cb.from_user.id != uid: await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
-    _pending_cat.pop(uid, None)
+    mid = cb.message.message_id
+    state = _pending_cat.pop(mid, None)
+    if not state: await cb.answer("⚠️ Đã hết hạn.", show_alert=True); return
+    if cb.from_user.id != state["uid"]:
+        _pending_cat[mid] = state
+        await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
+
     await cb.message.edit_text(f"📁 Giữ category: _{DEFAULT_CATEGORY}_", parse_mode="Markdown")
     await cb.answer("⏩ Bỏ qua")

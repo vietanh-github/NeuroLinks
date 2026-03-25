@@ -1,0 +1,7 @@
+- Naming: `snake_case` for Python functions and variables (`cmd_start`, `add_link`, `firebase_client`), `camelCase` for JS functions (`renderLinks`, `fmtTime`).
+- Import style: absolute imports in Python (`import bot.firebase_client as fb`), ES modules in JS (`import { getFirestore } from "..."`).
+- Error handling: try/except blocks around parsing, fallback values. Bot replies with `❌ Lỗi` message for UI feedback.
+- State management: `MemoryStorage` in aiogram (FSMContext) for admin flows (adding categories/users), Firebase Firestore for persistent data (realtime `onSnapshot`). FSM tracked via dicts `_pending_cat` and `_pending_dup` in Telegram bot.
+- API pattern: Firebase Admin SDK for backend writes with optimistic updates, Firebase JS SDK v11 for frontend reads.
+- Test structure: none
+- Deployment: Docker Compose for bot, Firebase Hosting for web (`deploy.sh`).

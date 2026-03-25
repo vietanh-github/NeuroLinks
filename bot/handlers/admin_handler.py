@@ -7,6 +7,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import bot.firebase_client as fb
@@ -245,9 +246,12 @@ async def cb_main(cb: CallbackQuery, state: FSMContext):
     if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
     await state.clear()
     uid = cb.from_user.id
-    await cb.message.edit_text(_main_text(_is_super(uid)),
-                               reply_markup=_kb_main(_is_super(uid)),
-                               parse_mode="Markdown")
+    try:
+        await cb.message.edit_text(_main_text(_is_super(uid)),
+                                   reply_markup=_kb_main(_is_super(uid)),
+                                   parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass  # message already up-to-date
     await cb.answer()
 
 
@@ -296,10 +300,17 @@ async def cb_link_delete(cb: CallbackQuery):
     total_pages  = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     if not links:
         b = InlineKeyboardBuilder(); b.button(text="🔙 Menu", callback_data="AM")
-        await cb.message.edit_text("📭 Chưa có link nào.", reply_markup=b.as_markup()); return
-    await cb.message.edit_text(_links_text(links, 0, total_pages),
-                               reply_markup=_kb_links(links, 0, total_pages),
-                               parse_mode="Markdown")
+        try:
+            await cb.message.edit_text("📭 Chưa có link nào.", reply_markup=b.as_markup())
+        except TelegramBadRequest:
+            pass
+        return
+    try:
+        await cb.message.edit_text(_links_text(links, 0, total_pages),
+                                   reply_markup=_kb_links(links, 0, total_pages),
+                                   parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass  # content unchanged — ignore
 
 
 # ── Callbacks: Users ──────────────────────────────────────────────────────────

@@ -77,7 +77,7 @@ async def _process_url(url: str, user, reply_fn, bot: Bot | None = None):
         # New link — save, track user in background, fire enrichment, reply
         doc_id = fb.add_link(url=url, category="", user_id=user.id, username=_username(user))
         asyncio.create_task(asyncio.to_thread(fb.track_user_activity, user.id, _username(user), 1))
-        asyncio.create_task(_fetch_and_save(doc_id, url, user.id, user.id, bot))
+        asyncio.create_task(_fetch_and_save(doc_id, url, user.id, user.id, bot, _username(user)))
         await reply_fn(
             f"✅ *Đã lưu link!*\n🔗 `{url}`\n\n"
             f"🤖 _AI đang tự động tạo tags…_",
@@ -89,7 +89,8 @@ async def _process_url(url: str, user, reply_fn, bot: Bot | None = None):
 
 async def _fetch_and_save(doc_id: str, url: str,
                           user_id: int = 0, chat_id: int = 0,
-                          bot: Bot | None = None) -> None:
+                          bot: Bot | None = None,
+                          username: str = "") -> None:
     """Fetch page metadata + AI tags and write back to Firestore. Runs in background.
 
     If `bot` is provided and the user has notify_done=True, sends a follow-up
@@ -118,13 +119,20 @@ async def _fetch_and_save(doc_id: str, url: str,
         if notify:
             title_line = f"📌 *{title}*\n" if title else ""
             tag_line   = "  ".join(f"`{t}`" for t in tags) if tags else "_chưa phân loại_"
+            username_line = f"👤 `{username}`\n" if username else ""
             text = (
-                f"✅ *Xử lý xong!*\n"
+                f"✅ *Xử lý xong!*\n\n"
                 f"{title_line}"
-                f"🏷 Tags: {tag_line}"
+                f"🔗 {url}\n"
+                f"{username_line}"
+                f"🏷 *Tags:* {tag_line}"
             )
+            kb = InlineKeyboardBuilder()
+            kb.button(text="🌐 Xem NeuroLinks", url=WEB_URL)
             try:
-                await bot.send_message(chat_id, text, parse_mode="Markdown")
+                await bot.send_message(chat_id, text,
+                                       reply_markup=kb.as_markup(),
+                                       parse_mode="Markdown")
             except Exception:
                 pass  # silently ignore send failures
 
@@ -165,10 +173,11 @@ async def dup_save(cb: CallbackQuery):
         _pending_dup[mid] = state
         await cb.answer("❌ Không phải lượt của bạn.", show_alert=True); return
 
-    url    = state["url"]
-    bot    = state.get("bot")
-    doc_id = fb.add_link(url=url, category="", user_id=state["uid"], username=_username(cb.from_user))
-    asyncio.create_task(_fetch_and_save(doc_id, url, state["uid"], state["uid"], bot))
+    url      = state["url"]
+    bot      = state.get("bot")
+    uname    = _username(cb.from_user)
+    doc_id = fb.add_link(url=url, category="", user_id=state["uid"], username=uname)
+    asyncio.create_task(_fetch_and_save(doc_id, url, state["uid"], state["uid"], bot, uname))
     await cb.message.edit_text(
         f"✅ *Đã lưu thêm!*\n🔗 `{url}`\n\n🤖 _AI đang tự động tạo tags…_",
         reply_markup=_web_kb().as_markup(),

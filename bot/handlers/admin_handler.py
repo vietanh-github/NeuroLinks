@@ -14,7 +14,7 @@ import bot.firebase_client as fb
 router = Router()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PER_PAGE = 5
-WEB_URL = "https://linva.net/NeuroLinks"
+WEB_URL  = "https://linva.net/NeuroLinks"
 
 
 # ── FSM ───────────────────────────────────────────────────────────────────────
@@ -35,12 +35,12 @@ def _can_admin(uid: int) -> bool:
 # ── Keyboard builders ─────────────────────────────────────────────────────────
 def _kb_main(is_super: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Links",       callback_data="AL:0")
-    b.button(text="📊 Thống kê",    callback_data="ASTAT")
-    b.button(text="📁 Categories",  callback_data="AC")
-    b.button(text="👥 Users",       callback_data="AU")
+    b.button(text="🔗 Links",      callback_data="AL:0")
+    b.button(text="📊 Thống kê",   callback_data="ASTAT")
+    b.button(text="👥 Users",      callback_data="AU")
     if is_super:
         b.button(text="👮 Sub-admins", callback_data="ASA")
+    b.button(text="🌐 Xem Web",    url=WEB_URL)
     b.adjust(2)
     return b.as_markup()
 
@@ -48,33 +48,14 @@ def _kb_links(links: list[dict], page: int, total_pages: int) -> InlineKeyboardM
     b = InlineKeyboardBuilder()
     for i, link in enumerate(links, 1):
         b.button(text=f"🗑 {i}", callback_data=f"ALD:{link['id']}")
-        b.button(text=f"✏️ {i}", callback_data=f"ALC:{link['id']}")
-    # navigation row
     nav_count = 0
     if page > 0:
         b.button(text="⬅️", callback_data=f"AL:{page-1}"); nav_count += 1
-    b.button(text=f"📄{page+1}/{total_pages}", callback_data="NOOP"); nav_count += 1
+    b.button(text=f"📄 {page+1}/{total_pages}", callback_data="NOOP"); nav_count += 1
     if page < total_pages - 1:
         b.button(text="➡️", callback_data=f"AL:{page+1}"); nav_count += 1
     b.button(text="🔙 Menu", callback_data="AM")
-    b.adjust(*([2] * len(links) + [nav_count, 1]))
-    return b.as_markup()
-
-def _kb_cat_select(doc_id: str) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    for cat in fb.get_categories():
-        b.button(text=cat, callback_data=f"ALCS:{doc_id}:{cat}")
-    b.button(text="❌ Hủy", callback_data="AL:0")
-    b.adjust(3, 1)
-    return b.as_markup()
-
-def _kb_categories(cats: list[str]) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    for cat in cats:
-        b.button(text=f"🗑 {cat}", callback_data=f"ACD:{cat}")
-    b.button(text="➕ Thêm", callback_data="ACAP")
-    b.button(text="🔙 Menu",  callback_data="AM")
-    b.adjust(*([1] * len(cats) + [1, 1]))
+    b.adjust(*([1] * len(links) + [nav_count, 1]))
     return b.as_markup()
 
 def _kb_users(users: list[int], can_add: bool) -> InlineKeyboardMarkup:
@@ -105,23 +86,29 @@ def _kb_cancel(back: str) -> InlineKeyboardMarkup:
 # ── Text helpers ──────────────────────────────────────────────────────────────
 def _domain(url: str) -> str:
     try:
-        return (urlparse(url).hostname or url).replace("www.", "")[:35]
+        return (urlparse(url).hostname or url).replace("www.", "")[:40]
     except Exception:
-        return url[:35]
+        return url[:40]
 
 def _links_text(links: list[dict], page: int, total_pages: int) -> str:
-    lines = [f"📋 **Links** — Trang {page+1}/{total_pages}\n"]
+    lines = [f"🔗 **Links** — Trang {page+1}/{total_pages}\n"]
     for i, lk in enumerate(links, 1):
-        cat   = lk.get("category", "—")
-        uname = lk.get("username", "—")
-        lines.append(f"{i}. **{_domain(lk.get('url',''))}** `[{cat}]` {uname}")
-    lines.append("\n_🗑 xóa  ✏️ đổi category_")
+        tags  = lk.get("ai_tags") or []
+        tag_str = "  " + "  ".join(f"#{t}" for t in tags[:2]) if tags else ""
+        title = lk.get("title") or _domain(lk.get("url", ""))
+        lines.append(f"{i}. **{title[:45]}**{tag_str}")
+    lines.append("\n_🗑 xóa_")
     return "\n".join(lines)
 
 def _main_text(is_super: bool) -> str:
     stats = fb.get_stats()
     role  = "👑 Super Admin" if is_super else "👮 Sub-Admin"
-    return f"⚙️ **Admin Panel** — {role}\n\n📊 Tổng: **{stats['total']}** links\n\nChọn mục:"
+    return (
+        f"⚙️ **NeuroLinks — Admin Panel**\n"
+        f"Vai trò: {role}\n\n"
+        f"📊 Tổng: **{stats['total']}** links đã lưu\n\n"
+        f"Chọn mục:"
+    )
 
 
 # ── /start ────────────────────────────────────────────────────────────────────
@@ -129,59 +116,93 @@ def _main_text(is_super: bool) -> str:
 async def cmd_start(message: Message):
     uid  = message.from_user.id
     name = message.from_user.first_name or "bạn"
-    if _is_super(uid):                      role = "👑 Super Admin"
-    elif _can_admin(uid):                   role = "👮 Sub-Admin"
-    elif fb.is_user_allowed(uid, ADMIN_ID): role = "✅ Thành viên"
-    else:                                   role = "❌ Chưa được cấp quyền"
-
     stats = fb.get_stats()
     can_use = fb.is_user_allowed(uid, ADMIN_ID)
 
+    if _is_super(uid):
+        role_badge = "👑 Super Admin"
+    elif _can_admin(uid):
+        role_badge = "👮 Sub-Admin"
+    elif can_use:
+        role_badge = "✅ Thành viên"
+    else:
+        role_badge = "🔒 Chưa được cấp quyền"
+
     text = (
-        f"👋 Xin chào **{name}**!\n\n"
-        f"🔗 **NeuroLinks** thu thập link từ Telegram và hiển thị trên web theo thời gian thực.\n\n"
-        f"Vai trò của bạn: {role}\n"
-        f"📊 Tổng cộng: **{stats['total']}** links đã lưu"
+        f"👋 Xin chào, **{name}**!\n\n"
+        f"╔═══════════════════════╗\n"
+        f"║  🧠 **NeuroLinks**          ║\n"
+        f"╚═══════════════════════╝\n\n"
+        f"Thu thập link từ Telegram và hiển thị trực tiếp trên web theo thời gian thực — tự động phân loại bằng AI.\n\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"👤 Vai trò của bạn: **{role_badge}**\n"
+        f"🔗 Tổng links đã lưu: **{stats['total']}**\n"
+        f"━━━━━━━━━━━━━━━━"
     )
     if not can_use:
-        text += "\n\n_Liên hệ admin để được cấp quyền gửi link._"
+        text += "\n\n_💬 Liên hệ admin để được cấp quyền gửi link._"
 
     b = InlineKeyboardBuilder()
     b.button(text="🌐 Xem NeuroLinks", url=WEB_URL)
+    if can_use:
+        b.button(text="📖 Hướng dẫn", callback_data="HELP")
     if _can_admin(uid):
         b.button(text="⚙️ Admin Panel", callback_data="AM_START")
-    b.button(text="📖 Hướng dẫn", callback_data="HELP")
     b.adjust(1)
-
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="Markdown")
 
 
 # ── /help ─────────────────────────────────────────────────────────────────────
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    uid = message.from_user.id
-    await _send_help(message.answer, uid)
+    await _send_help(message.answer, message.from_user.id)
 
 async def _send_help(send_fn, uid: int):
-    text = "📖 **Hướng dẫn NeuroLinks**\n\n"
-    text += "• /start — Thông tin & menu chính\n"
-    text += "• /help — Hướng dẫn này\n"
-    if fb.is_user_allowed(uid, ADMIN_ID):
-        text += (
-            "\n📎 **Gửi link:**\n"
-            "• Paste URL bất kỳ → bot lưu ngay + hỏi category\n"
-            "• /add `<url> [category]` — thêm kèm category\n"
-            "\n_Link trùng? Bot sẽ hỏi bạn muốn làm gì._\n"
-        )
+    can_use = fb.is_user_allowed(uid, ADMIN_ID)
+
+    text = (
+        "📖 **Hướng dẫn — NeuroLinks Bot**\n\n"
+        "┌ 🏠 /start — Trang chủ & thống kê\n"
+        "├ 📖 /help  — Hướng dẫn này\n"
+        "├ 🌐 /web   — Mở NeuroLinks trên trình duyệt\n"
+    )
     if _can_admin(uid):
-        text += "\n⚙️ /admin — Bảng điều khiển admin\n"
-    if not fb.is_user_allowed(uid, ADMIN_ID):
-        text += "\n_Liên hệ admin để được cấp quyền._"
+        text += "└ ⚙️ /admin — Bảng điều khiển admin\n"
+    else:
+        text += "└ ─────────────────────────\n"
+
+    if can_use:
+        text += (
+            "\n**📎 Cách gửi link:**\n"
+            "• Paste bất kỳ URL vào chat → bot lưu ngay\n"
+            "• Có thể gửi nhiều link cùng lúc trong một tin nhắn\n"
+            "• Dùng /add `<url>` để gửi theo lệnh\n\n"
+            "**🤖 AI tự động:**\n"
+            "• Bot trích xuất tiêu đề & mô tả trang web\n"
+            "• AI tự gán 1–3 tags phù hợp\n"
+            "• Website cập nhật realtime không cần reload\n\n"
+            "**⚠️ Link trùng?** Bot sẽ hỏi bạn muốn lưu thêm hay bỏ qua."
+        )
+    else:
+        text += "\n_💬 Liên hệ admin để được cấp quyền gửi link._"
 
     b = InlineKeyboardBuilder()
-    b.button(text="🌐 Xem kết quả trên web", url=WEB_URL)
+    b.button(text="🌐 Mở NeuroLinks", url=WEB_URL)
     b.adjust(1)
     await send_fn(text, reply_markup=b.as_markup(), parse_mode="Markdown")
+
+
+# ── /web ──────────────────────────────────────────────────────────────────────
+@router.message(Command("web"))
+async def cmd_web(message: Message):
+    b = InlineKeyboardBuilder()
+    b.button(text="🌐 Mở NeuroLinks", url=WEB_URL)
+    await message.answer(
+        "🌐 **NeuroLinks** — Danh sách link của bạn:\n\n"
+        "_Cập nhật realtime, lọc theo AI tags, tìm kiếm nhanh._",
+        reply_markup=b.as_markup(),
+        parse_mode="Markdown"
+    )
 
 
 # ── Callback shortcuts from /start ───────────────────────────────────────────
@@ -235,9 +256,9 @@ async def cb_main(cb: CallbackQuery, state: FSMContext):
 async def cb_stats(cb: CallbackQuery):
     if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
     stats = fb.get_stats()
-    lines = [f"📊 **Thống kê**\n\nTổng: **{stats['total']}** links\n"]
-    if stats["by_category"]:
-        lines.append("**Theo category:**")
+    lines = [f"📊 **Thống kê — NeuroLinks**\n\n🔗 Tổng: **{stats['total']}** links\n"]
+    if stats.get("by_category"):
+        lines.append("**Theo category (cũ):**")
         for cat, n in sorted(stats["by_category"].items(), key=lambda x: -x[1]):
             lines.append(f"  • {cat}: {n}")
     b = InlineKeyboardBuilder()
@@ -280,70 +301,6 @@ async def cb_link_delete(cb: CallbackQuery):
                                reply_markup=_kb_links(links, 0, total_pages),
                                parse_mode="Markdown")
 
-@router.callback_query(F.data.startswith("ALC:"))
-async def cb_link_change_cat(cb: CallbackQuery):
-    if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
-    doc_id = cb.data[4:]
-    await cb.message.edit_text(f"✏️ Chọn category mới:",
-                               reply_markup=_kb_cat_select(doc_id))
-    await cb.answer()
-
-@router.callback_query(F.data.startswith("ALCS:"))
-async def cb_link_cat_set(cb: CallbackQuery):
-    if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
-    parts = cb.data.split(":", 2)
-    if len(parts) < 3: await cb.answer("❌"); return
-    doc_id, cat = parts[1], parts[2]
-    fb.update_link_category(doc_id, cat)
-    await cb.answer(f"✅ Đổi thành [{cat}]")
-    links, total = fb.get_links_paginated(0, PER_PAGE)
-    total_pages  = max(1, (total + PER_PAGE - 1) // PER_PAGE)
-    await cb.message.edit_text(_links_text(links, 0, total_pages),
-                               reply_markup=_kb_links(links, 0, total_pages),
-                               parse_mode="Markdown")
-
-
-# ── Callbacks: Categories ─────────────────────────────────────────────────────
-def _cat_text(cats: list[str]) -> str:
-    body = "\n".join(f"• {c}" for c in cats) if cats else "_Chưa có_"
-    return f"📁 **Categories** ({len(cats)})\n_🗑 để xóa_\n\n{body}"
-
-@router.callback_query(F.data == "AC")
-async def cb_categories(cb: CallbackQuery, state: FSMContext):
-    if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
-    await state.clear()
-    cats = fb.get_categories()
-    await cb.message.edit_text(_cat_text(cats), reply_markup=_kb_categories(cats), parse_mode="Markdown")
-    await cb.answer()
-
-@router.callback_query(F.data.startswith("ACD:"))
-async def cb_cat_delete(cb: CallbackQuery):
-    if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
-    fb.remove_category(cb.data[4:])
-    await cb.answer("✅ Đã xóa")
-    cats = fb.get_categories()
-    await cb.message.edit_text(_cat_text(cats), reply_markup=_kb_categories(cats), parse_mode="Markdown")
-
-@router.callback_query(F.data == "ACAP")
-async def cb_cat_add_prompt(cb: CallbackQuery, state: FSMContext):
-    if not _can_admin(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
-    await state.set_state(AdminFSM.adding_category)
-    await cb.message.edit_text("📁 Nhập tên category mới (1–20 ký tự):",
-                               reply_markup=_kb_cancel("AC"))
-    await cb.answer()
-
-@router.message(AdminFSM.adding_category)
-async def fsm_add_category(message: Message, state: FSMContext):
-    if not _can_admin(message.from_user.id): return
-    name = message.text.strip()
-    if not 1 <= len(name) <= 20:
-        await message.reply("❌ Tên phải từ 1–20 ký tự."); return
-    added = fb.add_category(name)
-    await state.clear()
-    cats = fb.get_categories()
-    prefix = f"✅ Đã thêm **{name}**\n\n" if added else "⚠️ Đã tồn tại.\n\n"
-    await message.answer(prefix + _cat_text(cats), reply_markup=_kb_categories(cats), parse_mode="Markdown")
-
 
 # ── Callbacks: Users ──────────────────────────────────────────────────────────
 def _users_text(users: list[int]) -> str:
@@ -374,7 +331,7 @@ async def cb_user_add_prompt(cb: CallbackQuery, state: FSMContext):
     if not _is_super(cb.from_user.id): await cb.answer("⛔", show_alert=True); return
     await state.set_state(AdminFSM.adding_user)
     await cb.message.edit_text(
-        "👥 Nhập **Telegram User ID** cần thêm:\n_(Số nguyên, lấy từ @userinfobot)_",
+        "👥 Nhập **Telegram User ID** cần thêm:\n_(Số nguyên — lấy từ @userinfobot)_",
         reply_markup=_kb_cancel("AU"), parse_mode="Markdown")
     await cb.answer()
 

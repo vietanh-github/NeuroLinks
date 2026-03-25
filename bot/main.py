@@ -8,17 +8,25 @@ import asyncio
 import logging
 from dotenv import load_dotenv
 
-# Explicitly load NeuroLinks/.env regardless of which directory the bot is launched from
 _BOT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_BOT_ROOT, ".env"))
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, BotCommandScopeDefault
 from bot.handlers import admin_handler, link_handler
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger(__name__)
+
+
+_COMMANDS = [
+    BotCommand(command="start",  description="🏠 Trang chủ & thống kê"),
+    BotCommand(command="help",   description="📖 Hướng dẫn sử dụng"),
+    BotCommand(command="web",    description="🌐 Mở NeuroLinks trên web"),
+    BotCommand(command="admin",  description="⚙️ Bảng điều khiển (admin)"),
+]
 
 
 async def main():
@@ -29,12 +37,13 @@ async def main():
     bot = Bot(token=token)
     dp  = Dispatcher(storage=MemoryStorage())
 
-    # Admin router first (handles /start, /help, /admin + all admin callbacks)
+    # Register Bot Menu commands (shown in the ☰ shortcut bar)
+    await bot.set_my_commands(_COMMANDS, scope=BotCommandScopeDefault())
+
     dp.include_router(admin_handler.router)
-    # Link router last (F.text catch-all must come after specific commands)
     dp.include_router(link_handler.router)
 
-    log.info("🚀 NeuroLinks bot starting...")
+    log.info("🚀 NeuroLinks bot starting…")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
 
 
